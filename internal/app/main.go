@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"io"
 	"log"
 	"encoding/json"
 
@@ -17,7 +16,7 @@ const (
 )
 
 type Response struct {
-	ShortUrl string `json:"short_url"`
+	Url 		 string `json:"url"`
 	Status   int    `json:"status"`
 	Error    string
 }
@@ -36,14 +35,10 @@ func handleCreateShortUrl(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("POST CreateShortUrlRequest. Original URL: %s\n", origin_url)
 
-		short, err := service.CreateShortUrl(origin_url)
-		if err != nil {
-			http.Error(w, "Error creating short url", http.StatusInternalServerError)
-			return
-		}
+		short := service.GetShortUrl(origin_url)
 
 		resp := &Response {
-			ShortUrl: short,
+			Url: 			short,
 			Status:   http.StatusCreated,
 			Error:    "",
 		}
@@ -54,22 +49,40 @@ func handleCreateShortUrl(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("Failed to encode responce data; %v", err), http.StatusInternalServerError)
 			return
 		}
-
-		// map long url to short
-		// save
 	}
 }
 
 // GET
 func handleGetOriginalUrl(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "Error reading responce body", http.StatusInternalServerError)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, fmt.Sprintf("Error parsing form: %v", err), http.StatusInternalServerError)
 			return
 		}
-		defer r.Body.Close()
-		fmt.Printf("POST CreateShortUrlRequest. Body: %s\n", string(body))
+		short_url := r.Form.Get("shortUrl")
+		if len(short_url) == 0 {
+			http.Error(w, "Incorrect or empty 'shortUrl' field", http.StatusInternalServerError)
+			return
+		}
+		fmt.Printf("POST CreateShortUrlRequest. Original URL: %s\n", short_url)
+
+		origin, err := service.GetOriginUrl(short_url)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+
+		resp := &Response {
+			Url: 			origin,
+			Status:   http.StatusCreated,
+			Error:    "",
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to encode responce data; %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
