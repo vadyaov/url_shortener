@@ -2,55 +2,66 @@ package service
 
 import (
 	"crypto/sha256"
-	"sync"
 	"fmt"
 	"errors"
 
 	"github.com/yihleego/base62"
+
+	"github.com/vadyaov/url_shortener/internal/storage"
 )
 
-type SyncUrlMap struct {
-	urls  map[string]string
-	m          sync.Mutex
+type UrlService struct {
+	store storage.URLStore
 }
 
-var shortUrlsMap = SyncUrlMap {
-	urls: make(map[string]string),
+func NewUrlService(store storage.URLStore) *UrlService {
+	return &UrlService{store: store}
 }
 
-var originUrlsMap = SyncUrlMap {
-	urls: make(map[string]string),
-}
-
-func GetShortUrl(origin string) (string) {
-	shortUrlsMap.m.Lock()
-	defer shortUrlsMap.m.Unlock()
-
-
-	if _, ok := shortUrlsMap.urls[origin]; ok {
-		fmt.Println("This url is already exists in map")
-		return shortUrlsMap.urls[origin]
+func (us *UrlService) GetShortUrl(origin string) (string, error) {
+	existingShort, err := us.store.GetShortURL(origin)
+	if err == nil {
+		fmt.Println("This url is already exists in map, returning existing short url: ", existingShort)
+		return existingShort, nil
 	}
 
-	fmt.Println("Creating new Short Url...")
+	fmt.Println("Creating new short url for ", origin)
+
 	hash := sha256.Sum256([]byte(origin))
-	encoded := base62.StdEncoding.EncodeToString(hash[:])[:7]
-	shortUrlsMap.urls[origin] = encoded
-	{
-		originUrlsMap.m.Lock()
-		defer originUrlsMap.m.Unlock()
+	// try several lengths if collisions occur
+	for length := 7; length <= 10; length++ {
+		encoded := base62.StdEncoding.EncodeToString(hash[:])[:length]
+		
+		// try to save. if shortCode is already exist
+		// then SaveURL should produce an error --> go to another cycle iter
+		errSave := us.store.SaveURL(origin, encoded)
+		if errSave == nil {
+			return encoded, nil
+		}
 
-		originUrlsMap.urls[encoded] = origin
+		if errors.Is(errSave, storage.ErrDuplicateShortCode) {
+			fmt.Printf("Collision detected for short code '%s' with length %d, trying longer.\n", encoded, length)
+
+			if length == 10 {
+				return "", fmt.Errorf("failed to genereate unique short code for '%s' after multiple attempts: %w", origin, errSave)
+			}
+
+			continue
+		}
+
+		return "", fmt.Errorf("failed to save URL: %w", errSave)
 	}
-
-	return encoded
+	return "", errors.New("could not generate unique short URL")
 }
 
-func GetOriginUrl(short string) (string, error) {
-	originUrlsMap.m.Lock()
-	defer originUrlsMap.m.Unlock()
-	if _, ok := originUrlsMap.urls[short]; !ok {
-		return "", errors.New("url does not exist")
+func (us *UrlService) GetOriginUrl(short string) (string, error) {
+	origin, err := us.store.GetOriginURL(short)
+
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return "", err
+		}
+		return "", fmt.Errorf("failed to get original url: %w", err)
 	}
-	return originUrlsMap.urls[short], nil
+	return origin, nil
 }

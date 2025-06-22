@@ -1,99 +1,127 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
-	"log"
 	"encoding/json"
+	"net/http"
+	"errors"
+	// "flag"
+	"fmt"
+	"log"
 
 	"github.com/vadyaov/url_shortener/internal/service"
+	"github.com/vadyaov/url_shortener/internal/storage"
 )
 
 const (
-	baseUrl = "localhost:8081"
-	createShortUrl = "/create_short_url"
-	getOriginalUrl = "/get_original_url"
+	defaultBaseUrl 		 = "localhost:8081"
+	getShortUrlPath = "/get_short_url"
+	getOriginUrlPath = "/get_origin_url"
+	httpRedirect       = "/redirect"
 )
 
 type Response struct {
 	Url 		 string `json:"url"`
 	Status   int    `json:"status"`
-	Error    string
+	Error    string `json:"error"`
 }
+
+var urlService *service.UrlService
 
 // POST
 func handleCreateShortUrl(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, fmt.Sprintf("Error parsing form: %v", err), http.StatusInternalServerError)
+	if r.Method != http.MethodPost {
+			http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 			return
-		}
-		origin_url := r.Form.Get("originUrl")
-		if len(origin_url) == 0 {
-			http.Error(w, "Incorrect or empty 'originUrl' field", http.StatusInternalServerError)
-			return
-		}
-		fmt.Printf("POST CreateShortUrlRequest. Original URL: %s\n", origin_url)
-
-		short := service.GetShortUrl(origin_url)
-
-		resp := &Response {
-			Url: 			short,
-			Status:   http.StatusCreated,
-			Error:    "",
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to encode responce data; %v", err), http.StatusInternalServerError)
-			return
-		}
 	}
+
+	if err := r.ParseForm(); err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Error parsing form: %v", err))
+		return
+	}
+
+	origin_url := r.Form.Get("url")
+	if origin_url == "" {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Incorrect or empry 'url' field"))
+		return
+	}
+
+	short, err := urlService.GetShortUrl(origin_url)
+	if err != nil {
+		if errors.Is(err, storage.ErrDuplicateShortCode) {
+			respondWithError(w, http.StatusConflict, fmt.Sprintf("Failed to create short URL due to conflict: %v", err))
+		} else {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create short URL: %v", err))
+		}
+		return
+	}
+
+	fullShortUrl := fmt.Sprintf("http://%s/%s", r.Host, short)
+
+	respondWithJSON(w, http.StatusCreated, &Response{Url: fullShortUrl, Status: http.StatusCreated})
 }
 
 // GET
-func handleGetOriginalUrl(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, fmt.Sprintf("Error parsing form: %v", err), http.StatusInternalServerError)
-			return
-		}
-		short_url := r.Form.Get("shortUrl")
-		if len(short_url) == 0 {
-			http.Error(w, "Incorrect or empty 'shortUrl' field", http.StatusInternalServerError)
-			return
-		}
-		fmt.Printf("POST CreateShortUrlRequest. Original URL: %s\n", short_url)
-
-		origin, err := service.GetOriginUrl(short_url)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-
-		resp := &Response {
-			Url: 			origin,
-			Status:   http.StatusCreated,
-			Error:    "",
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to encode responce data; %v", err), http.StatusInternalServerError)
-			return
-		}
+func handleGetOriginUrl(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	short_url := r.URL.Query().Get("url")
+	if short_url == "" {
+		respondWithError(w, http.StatusBadRequest, "Incorrect or empty 'url' field")
+		return
+	}
+
+	origin, err := urlService.GetOriginUrl(short_url)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			respondWithError(w, http.StatusNotFound, "Short URL not found")
+		} else {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get original URL: %v", err))
+		}
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, &Response{Url: origin, Status: http.StatusOK})
+}
+
+func handleRedirect(w http.ResponseWriter, r *http.Request) {
+	shortCode := r.URL.Query().Get("url")
+	origin, err := urlService.GetOriginUrl(shortCode)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusMovedPermanently)
+	http.Redirect(w, r, origin, http.StatusFound)
+}
+
+func respondWithError(w http.ResponseWriter, code int, message string) {
+  respondWithJSON(w, code, Response{Error: message, Status: code})
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	response, _ := json.Marshal(payload)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(response)
 }
 
 func main() {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc(createShortUrl, handleCreateShortUrl)
-	mux.HandleFunc(getOriginalUrl, handleGetOriginalUrl)
+	store := storage.NewInMemoryStore()
+	urlService = service.NewUrlService(store)
 
-	fmt.Println(fmt.Sprintf("Server running on %s", baseUrl))
-	err := http.ListenAndServe(baseUrl, mux)
+	mux.HandleFunc(getShortUrlPath, handleCreateShortUrl)
+	mux.HandleFunc(getOriginUrlPath, handleGetOriginUrl)
+	mux.HandleFunc(httpRedirect, handleRedirect)
+
+	fmt.Println(fmt.Sprintf("Server running on %s", defaultBaseUrl))
+	err := http.ListenAndServe(defaultBaseUrl, mux)
 	if err != nil {
 		log.Fatal(err)
 	}
