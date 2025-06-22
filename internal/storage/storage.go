@@ -18,5 +18,5 @@ type URLStore interface {
 
 	// Returns short code from the original URL
 	// Returns ErrNotFound if the URL does not exist
-	GetShortURL(originalURL string) (string, error)
+	GetShortURL(originURL string) (string, error)
 }

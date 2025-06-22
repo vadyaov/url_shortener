@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"net/http"
 	"errors"
-	// "flag"
+	"flag"
 	"fmt"
 	"log"
+	"net/http"
+	"os"        // Для сигналов
+	"os/signal" // Для graceful shutdown
+	"syscall"   // Для сигналов
 
 	"github.com/vadyaov/url_shortener/internal/service"
 	"github.com/vadyaov/url_shortener/internal/storage"
@@ -111,18 +115,74 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 }
 
 func main() {
-	mux := http.NewServeMux()
+	storeType := flag.String("store", "inmemory", "Storage type: 'inmemory' or 'postgres'")
+	postgresDSN := flag.String("dsn", "postgres://user:password@localhost:5432/urlshortener?sslmode=disable", "PostgreSQL DSN")
 
-	store := storage.NewInMemoryStore()
+	flag.Parse()
+
+	var store storage.URLStore
+	var err error
+
+	appCtx, cancelAppCtx := context.WithCancel(context.Background())
+	defer cancelAppCtx()
+
+	log.Printf("Selected storage type: %s", *storeType)
+
+	switch *storeType {
+	case "inmemory":
+		store = storage.NewInMemoryStore()
+		log.Println("Using in-memory store")
+	case "postgres":
+		pgStore, pgErr := storage.NewPostgresStore(appCtx, *postgresDSN)
+		if pgErr != nil {
+			log.Fatalf("Failed to initialize PostgreSQL store: %w", pgErr)
+		}
+		store = pgStore
+		log.Println("Using postgres store")
+	default:
+		log.Fatalf("Unsupported store type: %s. Use 'inmemory' or 'postgres'.", *storeType)
+	}
+
 	urlService = service.NewUrlService(store)
+
+	mux := http.NewServeMux()
 
 	mux.HandleFunc(getShortUrlPath, handleCreateShortUrl)
 	mux.HandleFunc(getOriginUrlPath, handleGetOriginUrl)
 	mux.HandleFunc(httpRedirect, handleRedirect)
 
-	fmt.Println(fmt.Sprintf("Server running on %s", defaultBaseUrl))
-	err := http.ListenAndServe(defaultBaseUrl, mux)
-	if err != nil {
-		log.Fatal(err)
+	server := &http.Server {
+		addr: 	 defaultBaseUrl,
+		handler: mux,
 	}
+
+	// Graceful shutdown
+	go func() {
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+			<-quit // Блокируемся до получения сигнала
+
+			log.Println("Shutting down server...")
+			cancelAppCtx() // Сигнализируем компонентам (например, pgStore) о завершении
+
+			// Контекст для graceful shutdown сервера
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelShutdown()
+
+			if err := server.Shutdown(shutdownCtx); err != nil {
+					log.Fatalf("Server forced to shutdown: %v", err)
+			}
+			log.Println("Server gracefully stopped.")
+
+			// Закрываем соединения с БД после остановки сервера
+			if pgStore, ok := store.(*storage.PostgresStore); ok {
+					pgStore.Close()
+			}
+	}()
+
+	fmt.Printf("Server running on %s\n", *listenAddr)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("ListenAndServe: %v", err)
+	}
+	log.Println("Server exiting.")
 }
