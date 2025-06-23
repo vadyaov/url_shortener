@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"        // Для сигналов
 	"os/signal" // Для graceful shutdown
-	"syscall"   // Для сигналов
+	"strings"
+	"syscall" // Для сигналов
 	"time"
 
+	normalizeurl "github.com/vadyaov/url_shortener/internal/normalize"
 	"github.com/vadyaov/url_shortener/internal/service"
 	"github.com/vadyaov/url_shortener/internal/storage"
 )
@@ -21,7 +23,7 @@ const (
 	defaultBaseUrl   = "localhost:8081"
 	getShortUrlPath  = "/get_short_url"
 	getOriginUrlPath = "/get_origin_url"
-	httpRedirect     = "/redirect"
+	httpRedirect     = "/"
 )
 
 type Response struct {
@@ -50,10 +52,13 @@ func handleCreateShortUrl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// need to parse origin_url to remove 'http/https' prefix
-	// https://github.com --> github.com etc.
+	orig_url, err := normalizeurl.Normalize(origin_url)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
-	short, err := urlService.GetShortUrl(origin_url)
+	short, err := urlService.GetShortUrl(orig_url)
 	if err != nil {
 		if errors.Is(err, storage.ErrDuplicateShortCode) {
 			respondWithError(w, http.StatusConflict, fmt.Sprintf("Failed to create short URL due to conflict: %v", err))
@@ -95,16 +100,24 @@ func handleGetOriginUrl(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleRedirect(w http.ResponseWriter, r *http.Request) {
-	shortCode := r.URL.Query().Get("url")
-	origin, err := urlService.GetOriginUrl(shortCode)
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	shortCode := strings.TrimPrefix(r.URL.Path, "/")
+	if shortCode == "" {
+		http.Error(w, "Short code is missing", http.StatusBadRequest)
+		return
+	}
+
+	originUrl, err := urlService.GetOriginUrl(shortCode)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusMovedPermanently)
-	http.Redirect(w, r, origin, http.StatusFound)
+	http.Redirect(w, r, originUrl, http.StatusMovedPermanently)
 }
 
 func respondWithError(w http.ResponseWriter, code int, message string) {

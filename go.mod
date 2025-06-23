@@ -7,6 +7,7 @@ toolchain go1.24.2
 require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/yihleego/base62 v0.0.0-20220914065435-8adf690e207d
+	golang.org/x/net v0.21.0
 )
 
 require (
