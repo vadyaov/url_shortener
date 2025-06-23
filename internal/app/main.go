@@ -11,22 +11,23 @@ import (
 	"os"        // Для сигналов
 	"os/signal" // Для graceful shutdown
 	"syscall"   // Для сигналов
+	"time"
 
 	"github.com/vadyaov/url_shortener/internal/service"
 	"github.com/vadyaov/url_shortener/internal/storage"
 )
 
 const (
-	defaultBaseUrl 		 = "localhost:8081"
-	getShortUrlPath = "/get_short_url"
+	defaultBaseUrl   = "localhost:8081"
+	getShortUrlPath  = "/get_short_url"
 	getOriginUrlPath = "/get_origin_url"
-	httpRedirect       = "/redirect"
+	httpRedirect     = "/redirect"
 )
 
 type Response struct {
-	Url 		 string `json:"url"`
-	Status   int    `json:"status"`
-	Error    string `json:"error"`
+	Url    string `json:"url"`
+	Status int    `json:"status"`
+	Error  string `json:"error"`
 }
 
 var urlService *service.UrlService
@@ -34,8 +35,8 @@ var urlService *service.UrlService
 // POST
 func handleCreateShortUrl(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-			http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
-			return
+		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
 	if err := r.ParseForm(); err != nil {
@@ -45,9 +46,12 @@ func handleCreateShortUrl(w http.ResponseWriter, r *http.Request) {
 
 	origin_url := r.Form.Get("url")
 	if origin_url == "" {
-		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Incorrect or empry 'url' field"))
+		respondWithError(w, http.StatusBadRequest, "Incorrect or empry 'url' field")
 		return
 	}
+
+	// need to parse origin_url to remove 'http/https' prefix
+	// https://github.com --> github.com etc.
 
 	short, err := urlService.GetShortUrl(origin_url)
 	if err != nil {
@@ -104,7 +108,7 @@ func handleRedirect(w http.ResponseWriter, r *http.Request) {
 }
 
 func respondWithError(w http.ResponseWriter, code int, message string) {
-  respondWithJSON(w, code, Response{Error: message, Status: code})
+	respondWithJSON(w, code, Response{Error: message, Status: code})
 }
 
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
@@ -116,12 +120,11 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 
 func main() {
 	storeType := flag.String("store", "inmemory", "Storage type: 'inmemory' or 'postgres'")
-	postgresDSN := flag.String("dsn", "postgres://user:password@localhost:5432/urlshortener?sslmode=disable", "PostgreSQL DSN")
+	postgresDSN := flag.String("dsn", "postgres://shortener:pswrd@localhost:5432/urlshortener_db?sslmode=disable", "PostgreSQL DSN")
 
 	flag.Parse()
 
 	var store storage.URLStore
-	var err error
 
 	appCtx, cancelAppCtx := context.WithCancel(context.Background())
 	defer cancelAppCtx()
@@ -135,7 +138,7 @@ func main() {
 	case "postgres":
 		pgStore, pgErr := storage.NewPostgresStore(appCtx, *postgresDSN)
 		if pgErr != nil {
-			log.Fatalf("Failed to initialize PostgreSQL store: %w", pgErr)
+			log.Fatalf("Failed to initialize PostgreSQL store: %s", pgErr)
 		}
 		store = pgStore
 		log.Println("Using postgres store")
@@ -151,38 +154,38 @@ func main() {
 	mux.HandleFunc(getOriginUrlPath, handleGetOriginUrl)
 	mux.HandleFunc(httpRedirect, handleRedirect)
 
-	server := &http.Server {
-		addr: 	 defaultBaseUrl,
-		handler: mux,
+	server := &http.Server{
+		Addr:    defaultBaseUrl,
+		Handler: mux,
 	}
 
 	// Graceful shutdown
 	go func() {
-			quit := make(chan os.Signal, 1)
-			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-			<-quit // Блокируемся до получения сигнала
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+		<-quit // Блокируемся до получения сигнала
 
-			log.Println("Shutting down server...")
-			cancelAppCtx() // Сигнализируем компонентам (например, pgStore) о завершении
+		log.Println("Shutting down server...")
+		cancelAppCtx() // Сигнализируем компонентам (например, pgStore) о завершении
 
-			// Контекст для graceful shutdown сервера
-			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancelShutdown()
+		// Контекст для graceful shutdown сервера
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelShutdown()
 
-			if err := server.Shutdown(shutdownCtx); err != nil {
-					log.Fatalf("Server forced to shutdown: %v", err)
-			}
-			log.Println("Server gracefully stopped.")
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Fatalf("Server forced to shutdown: %v", err)
+		}
+		log.Println("Server gracefully stopped.")
 
-			// Закрываем соединения с БД после остановки сервера
-			if pgStore, ok := store.(*storage.PostgresStore); ok {
-					pgStore.Close()
-			}
+		// Закрываем соединения с БД после остановки сервера
+		if pgStore, ok := store.(*storage.PostgresStore); ok {
+			pgStore.Close()
+		}
 	}()
 
-	fmt.Printf("Server running on %s\n", *listenAddr)
+	fmt.Printf("Server running on %s\n", defaultBaseUrl)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("ListenAndServe: %v", err)
+		log.Fatalf("ListenAndServe: %v", err)
 	}
 	log.Println("Server exiting.")
 }
