@@ -2,13 +2,18 @@ package service
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"errors"
+	"fmt"
 
 	"github.com/yihleego/base62"
 
 	"github.com/vadyaov/url_shortener/internal/storage"
 )
+
+type URLShortenerService interface {
+	GetShortUrl(origin string) (string, error)
+	GetOriginUrl(short string) (string, error)
+}
 
 type UrlService struct {
 	store storage.URLStore
@@ -31,7 +36,7 @@ func (us *UrlService) GetShortUrl(origin string) (string, error) {
 	// try several lengths if collisions occur
 	for length := 7; length <= 10; length++ {
 		encoded := base62.StdEncoding.EncodeToString(hash[:])[:length]
-		
+
 		// try to save. if shortCode is already exist
 		// then SaveURL should produce an error --> go to another cycle iter
 		errSave := us.store.SaveURL(origin, encoded)
@@ -65,3 +70,5 @@ func (us *UrlService) GetOriginUrl(short string) (string, error) {
 	}
 	return origin, nil
 }
+
+var _ URLShortenerService = (*UrlService)(nil)
