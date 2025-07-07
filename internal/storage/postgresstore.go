@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-  "github.com/jackc/pgx/v5/pgconn"
   "github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,7 +32,7 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 		return nil, fmt.Errorf("failed to initialize database schema: %w", err)
 	}
 
-	return store, nil
+	return &PostgresStore{pool: pool, ctx: ctx}, nil
 }
 
 func (store *PostgresStore) initSchema() error {
@@ -68,7 +67,7 @@ func (store *PostgresStore) SaveURL(originUrl, shortCode string) error {
 	}
 
 	query := `INSERT INTO urls (short_code, origin_url) VALUES ($1, $2)`
-	_, err := store.pool.Exec(store.ctx, query, shortCode, originUrl)
+	_, err = store.pool.Exec(store.ctx, query, shortCode, originUrl)
 	if err != nil {
 		return fmt.Errorf("failed to save URL to postgres: %w", err)
 	}
@@ -78,7 +77,7 @@ func (store *PostgresStore) SaveURL(originUrl, shortCode string) error {
 func (s *PostgresStore) GetOriginURL(shortCode string) (string, error) {
 	var originUrl string
 	query := `SELECT origin_url FROM urls WHERE short_code = $1`
-	err := store.pool.QueryRow(store.ctx, query, shortCode).Scan(&originUrl)
+	err := s.pool.QueryRow(s.ctx, query, shortCode).Scan(&originUrl)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", ErrNotFound
@@ -91,7 +90,7 @@ func (s *PostgresStore) GetOriginURL(shortCode string) (string, error) {
 func (s *PostgresStore) GetShortURL(originUrl string) (string, error) {
 	var shortUrl string
 	query := `SELECT short_url FROM urls WHERE origin_url = $1`
-	err := store.pool.QueryRow(store.ctx, query, originUrl).Scan(&shortUrl)
+	err := s.pool.QueryRow(s.ctx, query, originUrl).Scan(&shortUrl)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", ErrNotFound

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package shortener_v0;
+
+option go_package = "github.com/vadyaov/url_shortener/internal/app/grpc/pkg/shortener_v0;shortener_v0";
+
+service ShortenerV0 {
+  rpc GetShortUrl(Request) returns (Response);
+  rpc GetOriginUrl(Request) returns (Response);
+}
+
+message Request {
+  string url = 1;
+}
+
+message Response {
+  string url = 1;
+}
