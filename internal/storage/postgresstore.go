@@ -87,7 +87,7 @@ func (store *PostgresStore) SaveURL(originUrl, shortCode string) error {
 func (store *PostgresStore) GetOriginURL(shortCode string) (string, error) {
 	var originUrl string
 	query := `SELECT origin_url FROM urls WHERE short_code = $1`
-	err := s.pool.QueryRow(s.ctx, query, shortCode).Scan(&originUrl)
+	err := store.pool.QueryRow(store.ctx, query, shortCode).Scan(&originUrl)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", ErrNotFound
