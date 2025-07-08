@@ -8,6 +8,7 @@ import (
 	"github.com/yihleego/base62"
 
 	"github.com/vadyaov/url_shortener/internal/storage"
+	normalizeurl "github.com/vadyaov/url_shortener/internal/normalize"
 )
 
 type URLShortenerService interface {
@@ -24,7 +25,12 @@ func NewUrlService(store storage.URLStore) *UrlService {
 }
 
 func (us *UrlService) GetShortUrl(origin string) (string, error) {
-	existingShort, err := us.store.GetShortURL(origin)
+	origin_norm, err := normalizeurl.Normalize(origin)
+	if err != nil {
+		return "", err
+	}
+
+	existingShort, err := us.store.GetShortURL(origin_norm)
 	if err == nil {
 		fmt.Println("This url is already exists in map, returning existing short url: ", existingShort)
 		return existingShort, nil

@@ -1,4 +1,4 @@
-package handlers
+package http
 
 import (
 	"encoding/json"
@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	normalizeurl "github.com/vadyaov/url_shortener/internal/normalize"
 	"github.com/vadyaov/url_shortener/internal/service"
 	"github.com/vadyaov/url_shortener/internal/storage"
 )
@@ -45,13 +44,7 @@ func (h *UrlHandler) HandleCreateShortUrl(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	orig_url, err := normalizeurl.Normalize(origin_url)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	short, err := h.service.GetShortUrl(orig_url)
+	short, err := h.service.GetShortUrl(origin_url)
 	if err != nil {
 		if errors.Is(err, storage.ErrDuplicateShortCode) {
 			respondWithError(w, http.StatusConflict, fmt.Sprintf("Failed to create short URL due to conflict: %v", err))

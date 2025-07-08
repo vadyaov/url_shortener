@@ -13,9 +13,7 @@ generate:
 
 generate-shortener-api:
 	mkdir -p pkg/shortener_v0
-	protoc --proto_path api/shortener_v0 \
+	PATH=$(LOCAL_BIN):$$PATH protoc --proto_path api/shortener_v0 \
 	--go_out=pkg/shortener_v0 --go_opt=paths=source_relative \
-	--plugin=protoc-gen-go=bin/protoc-gen-go \
 	--go-grpc_out=pkg/shortener_v0 --go-grpc_opt=paths=source_relative \
-	--plugin=protoc-gen-gogrpc=bin/protoc-gen-go-grpc \
 	api/shortener_v0/shortener.proto
